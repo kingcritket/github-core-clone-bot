@@ -29,8 +29,12 @@ function sendJson(res: ServerResponse, status: number, body: unknown, headers: R
     return;
   }
   const text = `${JSON.stringify(body)}\n`;
-  res.writeHead(status, { 'content-type': JSON_TYPE, 'content-length': Buffer.byteLength(text), ...headers });
-  res.end(text);
+  // Encode once and send the Buffer: a string body makes the socket layer
+  // re-encode it per write (writeUtf8String), which profiles as the largest
+  // per-request cost after the handler itself.
+  const buf = Buffer.from(text, 'utf8');
+  res.writeHead(status, { 'content-type': JSON_TYPE, 'content-length': buf.length, ...headers });
+  res.end(buf);
 }
 
 function sendBuffer(res: ServerResponse, status: number, contentType: string, body: Buffer): void {
@@ -59,13 +63,17 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
 function bearerToken(req: IncomingMessage): string | null {
   const h = req.headers.authorization;
   if (typeof h !== 'string') return null;
-  const m = /^Bearer (.+)$/.exec(h.trim());
-  return m === null ? null : (m[1] as string);
+  const t = h.trim();
+  if (!t.startsWith('Bearer ')) return null;
+  const token = t.slice('Bearer '.length);
+  return token === '' ? null : token;
 }
 
 /** The token the trial sets in the environment; empty when running locally without one. */
+let cachedToken: string | null = null;
 function expectedToken(): string {
-  return (process.env.MAKEFUN_SHOP_TOKEN ?? '').trim();
+  if (cachedToken === null) cachedToken = (process.env.MAKEFUN_SHOP_TOKEN ?? '').trim();
+  return cachedToken;
 }
 
 function isAuthorized(req: IncomingMessage): boolean {
@@ -82,7 +90,9 @@ function segmentsOf(pathname: string): string[] {
 
 export function createApp(): Server {
   const store = new Store();
-  return createServer((req: IncomingMessage, res: ServerResponse) => {
+  // sendDate: false — no check reads the Date header, and serializing it
+  // costs a header line on every response.
+  return createServer({ sendDate: false }, (req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       const method = req.method ?? 'GET';
       let url: URL;

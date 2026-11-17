@@ -14,7 +14,8 @@ export function sha1Hex(data: Buffer): string {
 /** The object id of a git object: SHA-1 of "<type> <len>\0" + raw bytes. */
 export function objectId(type: GitObjectType, data: Buffer): string {
   const head = Buffer.from(`${type} ${data.length}\0`, 'ascii');
-  return sha1Hex(Buffer.concat([head, data]));
+  // Feed the two parts to the hash directly: no concatenated copy of the data.
+  return createHash('sha1').update(head).update(data).digest('hex');
 }
 
 export function isOid(s: string): boolean {
@@ -271,8 +272,10 @@ export function closure(repo: Repo, wants: string[], haves: string[], depth?: nu
       queue.push(w);
     }
   }
-  while (queue.length > 0) {
-    const oid = queue.shift() as string;
+  // Index-based queue: shift() is O(n) per pop and this walk is O(n) pops.
+  let qhead = 0;
+  while (qhead < queue.length) {
+    const oid = queue[qhead++] as string;
     const d = dist.get(oid) as number;
     const obj = repo.objects.get(oid);
     if (obj === undefined) continue;
@@ -317,8 +320,9 @@ export function closure(repo: Repo, wants: string[], haves: string[], depth?: nu
         hq.push(h);
       }
     }
-    while (hq.length > 0) {
-      const oid = hq.shift() as string;
+    let hhead = 0;
+    while (hhead < hq.length) {
+      const oid = hq[hhead++] as string;
       const obj = repo.objects.get(oid);
       if (obj === undefined) continue;
       if (obj.type === 'commit') {
@@ -403,7 +407,9 @@ export function writePack(objects: Map<string, GitObject>): Buffer {
       headerBytes.push(b);
     }
     parts.push(Buffer.from(headerBytes));
-    parts.push(deflateSync(obj.data));
+    // Level 1 deflate: ~2.5x faster than the default level 6 on small objects
+    // for a few bytes of extra size, and any level inflates identically.
+    parts.push(deflateSync(obj.data, { level: 1 }));
   }
   const body = Buffer.concat(parts);
   const trailer = createHash('sha1').update(body).digest();
@@ -510,26 +516,56 @@ export function readPack(buf: Buffer): Map<string, PackEntry> {
 }
 
 /**
- * Inflate a deflate stream starting at `off`. Node's sync inflate has no consumed-length
- * API, so find the stream's end by binary search: a slice shorter than the stream throws,
- * a slice at or past its end inflates cleanly (trailing bytes are ignored).
+ * Inflate a deflate stream starting at `off`. Node's sync inflate stops at the
+ * end of the first zlib stream and ignores whatever follows it, so one call
+ * inflates the object no matter how many objects the pack still holds. The
+ * stream's end is then located by its Adler-32 trailer (RFC 1950: the checksum
+ * of the inflated data, big-endian, in the stream's last 4 bytes). A candidate
+ * end is verified by inflating exactly that slice, so a coincidental Adler
+ * match inside the deflate data can only cost one extra scan step, never a
+ * wrong parse. This replaces a binary search that re-inflated the stream
+ * ~log2(n) times per object (most of them throwing).
  */
 function inflateAt(buf: Buffer, off: number, expectedSize: number, end: number): { data: Buffer; next: number } {
-  let lo = off + 1;
-  let hi = end;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    try {
-      const data = inflateSync(buf.subarray(off, mid));
-      if (data.length === expectedSize) hi = mid;
-      else lo = mid + 1;
-    } catch {
-      lo = mid + 1;
-    }
+  let data: Buffer;
+  try {
+    data = inflateSync(buf.subarray(off, end));
+  } catch {
+    throw new Error('pack-size');
   }
-  const data = inflateSync(buf.subarray(off, lo));
   if (data.length !== expectedSize) throw new Error('pack-size');
-  return { data, next: lo };
+  const needle = Buffer.alloc(4);
+  needle.writeUInt32BE(adler32(data), 0);
+  let searchFrom = off + 2;
+  for (;;) {
+    const at = buf.indexOf(needle, searchFrom);
+    if (at < 0 || at + 4 > end) throw new Error('pack-size');
+    const candidateEnd = at + 4;
+    try {
+      const check = inflateSync(buf.subarray(off, candidateEnd));
+      if (check.length === expectedSize && check.equals(data)) return { data, next: candidateEnd };
+    } catch {
+      // Not the true stream end: keep scanning past this match.
+    }
+    searchFrom = at + 1;
+  }
+}
+
+/** Adler-32 (RFC 1950), the checksum a zlib stream carries in its trailer. */
+function adler32(data: Buffer): number {
+  let a = 1;
+  let b = 0;
+  const NMAX = 5552;
+  for (let off = 0; off < data.length; off += NMAX) {
+    const stop = Math.min(data.length, off + NMAX);
+    for (let i = off; i < stop; i++) {
+      a += data[i] as number;
+      b += a;
+    }
+    a %= 65521;
+    b %= 65521;
+  }
+  return ((b << 16) | a) >>> 0;
 }
 
 /** Apply a git binary delta to a base buffer. */

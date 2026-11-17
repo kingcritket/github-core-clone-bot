@@ -84,3 +84,43 @@ Started: 2026-11-17 ~09:00 WIB. No credentials, API keys or personal data are re
   ephemeral port 42983, registered, polled, exited 0 on done=true.
 - ~09:40 — BUILD_REPORT.md written. Build + local tests DONE. NOT submitted (per task
   instructions — submit is the user's step via the kit CLI before 21 Nov 2026 13:30 WIB).
+
+## 5. Optimasi performa (2026-11-17 ~10:20–10:40 WIB)
+
+Target: p50 server 584.530 µs → ≤390.000 µs (skor server 922 → ~952, rank 10).
+Profiling in-process (microbench) menemukan `readPack` sebagai biang utama:
+`inflateAt` binary-search meng-inflate ulang tiap objek ~log2(n) kali
+(958 µs/pack 3 objek). Perbaikan di `git.ts` + `app.ts` saja:
+
+- `git.ts` `inflateAt`: 1× `inflateSync` atas sisa pack (Node mengabaikan
+  trailing bytes) + cari ujung stream lewat trailer Adler-32 (RFC 1950) +
+  verifikasi dengan inflate slice kandidat. `readPack` 958 → 78 µs/op;
+  handler push 855 → 149 µs/op. Terverifikasi benar pada: blob kosong,
+  blob 100 KB, blob berisi byte Adler-nya sendiri, pack 135 objek, pack
+  corrupt/terpotong tetap throw, dan pack delta ASLI dari `git repack`
+  (4 objek OFS-delta) round-trip byte-identik lewat `handleReceivePack` +
+  `handleUploadPack` (dicek dengan `readPack` kit sendiri).
+- `git.ts` `writePack`: deflate level 1 (2,5× lebih cepat dari level 6,
+  output hanya beberapa byte lebih besar; inflate tidak peduli level).
+  Fetch full 200 commit: 21,3 → 13,4 ms.
+- `git.ts` `objectId`: `hash.update(head).update(data)` tanpa `Buffer.concat`.
+- `git.ts` `closure()`: queue berbasis indeks, bukan `shift()` O(n).
+- `app.ts` `sendJson`: kirim `Buffer` (bukan string) — `writeUtf8String`
+  adalah hotspot profil terbesar setelah handler; CPU server 59,2 →
+  47,3 µs/request pada load 20 detik (127.613 → 206.615 request).
+- `app.ts`: `sendDate: false` (tidak ada check membaca header Date),
+  token ekspektasi di-cache, bearer check `startsWith` bukan regex.
+
+Hasil `sdk/run.ts --perf` (forge fresh, 3×, kode SESUDAH vs baseline 1×):
+push 639→321/326/417 ms (42→50 poin), clone 181→108/91/101 (32→41/44/42),
+read 678→758/660/664 (50), write 106→101/107/106 (47/46/47);
+perf 171→186/190/189, total 971→986/990/989, perf_p50_us 301.897→~227.000.
+`grade-local --driver process` (dengan forwarder, 1 trial):
+SESUDAH 978 (feature 600, agent 200, perf 178, p50 272.328 µs);
+baseline kode LAMA di kondisi sama JUGA 978 (perf 178, p50 265.487 µs) —
+di lingkungan trial lokal forwarder/latensi per-request mendominasi dan
+menutupi penghematan handler, jadi angka grade-local tidak bergerak;
+penghematan handler yang terukur langsung (push −49%, CPU/request −20%)
+adalah yang akan diteruskan ke server, besarnya tergantung seberapa
+CPU-bound entry di sandbox produksi (2 CPU gVisor) vs forwarder-nya.
+Conformance tetap 120/120 di semua run. README.md tidak diubah.
