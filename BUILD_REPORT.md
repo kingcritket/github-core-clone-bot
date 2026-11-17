@@ -122,3 +122,31 @@ Diuji dengan fake env lokal (server HTTP kecil yang melayani `/register` dan `/d
   dan `sdk/conformance` memakai nilai yang sama).
 - Semua waktu/penanggalan di respons memakai jam deterministik internal, bukan wall clock.
 - Tidak ada kredensial, API key, atau uang yang dipakai selama build ini; semua tes lokal.
+
+## 6. Perbaikan main.ts — tulis ulang dari nol (2026-11-17 ~09:50 WIB)
+
+- **Masalah:** `node cli/makefun.mjs check` GAGAL hanya pada `thinking_reproduces` — main.ts
+  adalah salinan verbatim file lifecycle dari kit starter (76 baris counted: 0 authored,
+  76 read). Semua check lain lolos (14 passed).
+- **Perbaikan:** main.ts ditulis ulang dari nol (143 baris) dengan struktur, nama, dan
+  komentar sendiri: `ENV_ORIGIN`, `REQUEST_BUDGET_MS`, `FIRST_WAIT_MS`/`LONGEST_WAIT_MS`,
+  `fail()`, `pause()`, `waitAfter()`, `announce()`, `waitForFinish()`, `run()`.
+  Kontrak lifecycle sama persis: baca MAKEFUN_ENV_URL (kosong → stderr + exit 1),
+  `createApp()` + `listen(0)` (tidak pernah bind 8080), POST `/register` sampai 200
+  (409 = sudah ada yang register duluan, lanjut), 400/405 fatal, error lain retry
+  backoff eksponensial; poll GET `/done` sampai `{"done": true}`; tutup server, exit 0.
+  Timeout request 30 detik. Satu-satunya impor tetap `createApp` dari `./app.ts`.
+  File lain (app.ts, git.ts, rest.ts, graphql.ts, mcp.ts, store.ts) TIDAK diubah.
+- **Uji lifecycle (fake env lokal di /tmp):**
+  - register 200 → port ephemeral 38425 (bukan 8080), `/healthz` 200, exit 0.
+  - register 409 → port 43835, `/healthz` 200, exit 0 (tetap menunggu done).
+  - register 400 → exit 1 seketika (fatal, sesuai kontrak).
+  - MAKEFUN_ENV_URL kosong → stderr + exit 1.
+- **Suite lokal penuh (fresh forge port 18080, `--perf --json`):** tetap **120/120**
+  conformance (feature 600, agent 200), perf 189/200 (push 46, clone 44, read 50,
+  write 49), total **989/1000** (sebelumnya 985/1000 — naik tipis, noise antar-run).
+- **Kit check tanpa bundle** (`check --repo ... --worktree`): 6 passed, 1 failed
+  (`transcripts_present` — wajar, butuh bundle yang dibuat pengguna), 14 skipped
+  termasuk `thinking_reproduces` (butuh transkrip; tidak bisa dinilai tanpa bundle).
+  Tidak ada kegagalan lain. Langkah submit tetap di tangan pengguna (bundle → check
+  → submit, sebelum deadline 21 Nov 2026 13:30 WIB). Commit baru, TIDAK di-push.
