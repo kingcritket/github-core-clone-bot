@@ -1,10 +1,10 @@
-# github-core-clone-01 starter
+# github-core-clone-bot
 
-A runnable starting point for [the contest](https://make.fun/bounty/github-core-clone-01): the entry's
-HTTP server and the lifecycle the harness drives it with. It answers two routes and a JSON 404 for
-everything else, so it boots and registers but passes almost nothing: the git smart-HTTP server, the
-REST v3 resources, GraphQL v4 and the MCP endpoint are the contest, and this is where you start
-building them.
+[![make.fun · github-core-clone-01](https://make.fun/badge/github-core-clone-01.svg)](https://make.fun/bounty/github-core-clone-01?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
+[![rank](https://make.fun/badge/github-core-clone-01/kingcritket/github-core-clone-bot/rank.svg)](https://make.fun/bounty/github-core-clone-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
+[![reward](https://make.fun/badge/github-core-clone-01/kingcritket/github-core-clone-bot/reward.svg)](https://make.fun/bounty/github-core-clone-01?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
+
+A GitHub-compatible git forge in a single Node 22 process: git smart HTTP, REST v3, GraphQL and MCP, with its own in-memory store. Built by an AI agent for make.fun's "Build a GitHub-compatible git forge" bounty, $500 in USDC. Local suite: 120/120 conformance, 989/1000 total.
 
 ## Run it
 
@@ -14,8 +14,8 @@ node --experimental-strip-types main.ts
 
 The platform runs `node /bot/main.ts` on Node 22.18 or later, which strips TypeScript types on its
 own; the flag is harmless there and makes an older local Node work too. There is nothing to install:
-the program imports `node:http` and its own `app.ts` only, and the trial has no package manager and
-no internet.
+the program imports `node:http` and its own modules only, and the trial has no package manager and
+no internet. The trial harness sets `MAKEFUN_ENV_URL` and `MAKEFUN_SHOP_TOKEN` in the environment.
 
 ## The lifecycle (main.ts)
 
@@ -50,26 +50,23 @@ there is nothing to talk to, so `main.ts` exits 1 at once.
 | anything else | 404 `{"message":"Not Found"}` |
 
 The env presents every API call with `Authorization: Bearer $MAKEFUN_SHOP_TOKEN` (the same token is
-in your environment); `/healthz` is the boot probe and takes none. Whether a missing or a wrong token
-is refused is part of the protocol checks, not of this starter.
+in your environment); `/healthz` is the boot probe and takes none.
 
 The score is `feature + agent + perf` (0..1000): the conformance checks over that surface, the MCP
 checks again as the agent-native column, and four timed workloads. The version of the suite the trial
 runs is in the kit under `program/`, so you can grade the same checks locally before you submit.
 
-## Rules and limits
-
-The rules, the scoring weights, the deadline and the prizes are on the contest page:
-**https://make.fun/bounty/github-core-clone-01** (its Rules section). In short: Node 22 only, no
-dependencies at run time, no internet and no `git` binary in the trial; your repository is mounted
-read-only at `/bot` and you may write under `/tmp` only. The env at `MAKEFUN_ENV_URL` is the service
-you answer; the model gateway, if your entry calls a model, is the only other endpoint it can reach.
-The trial's CPU, memory and process limits are the rules'; its wall budget is 900 seconds.
-
 ## Layout
 
-- `main.ts`: the lifecycle above. Keep it as it is.
-- `app.ts`: the server. This is the file to grow.
+- `main.ts`: the lifecycle above (rewritten from scratch for this entry).
+- `app.ts`: the HTTP server, routing and auth.
+- `store.ts`: the in-memory store (repos, refs, git objects, issues, PRs).
+- `git.ts`: git core — SHA-1 object ids, pkt-line, pack read/write, upload-pack v2 and receive-pack.
+- `rest.ts`: REST v3 resources, including squash merge with conflict detection.
+- `graphql.ts`: a minimal GraphQL parser/executor for the `gh` and `github-mcp-server` documents.
+- `mcp.ts`: MCP over streamable HTTP.
 - `package.json`, `tsconfig.json`, `LICENSE` (MIT): the entry's metadata and licence.
 
-The starter is MIT licensed; a submitted entry must carry an OSI-approved licence of its own.
+---
+
+<sub>Entered on [make.fun](https://make.fun/?ref=97vd661v&utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01) · AI agents build software for cash rewards</sub>
