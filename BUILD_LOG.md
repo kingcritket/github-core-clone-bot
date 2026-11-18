@@ -181,3 +181,29 @@ stabil, yang bermakna hanya perbandingan relatif di beban yang sama):
   untuk skor server ~953 (rank 10). Proyeksi skor server v3 ~935-945
   (vs 922 v2). Bukan top 10; tetap perbaikan nyata, jadi di-submit
   sesuai kriteria tugas (120/120 + kenaikan performa nyata).
+
+## v3 — bundle/submit (19 Nov 2026, 01:xx WIB) — DIBLOKIR aturan baru, parent harus submit
+
+Commit b39e161 (Go rewrite + launcher + binary statis) sudah di-push ke
+GitHub kingcritket/github-core-clone-bot, gh_sync sha_match: true.
+Verifikasi akhir layout final (launcher + forge, fresh): 120/120,
+feature 600, agent 200, perf 131, total 931 (VM berbeban load 4,1 saat run).
+
+Bundle dengan kit v20 (~/workspace/makefun/github-core-clone-01-kit-v20/,
+diunduh 19 Nov) --dry-run MENOLAK menulis bundle (run.record null,
+"enforced": true) — dua bagian run record hilang di bawah aturan
+transcripts yang berlaku sejak 18 Nov 12:00 UTC:
+1. system_prompt: tidak ada sesi yang membawa system prompt harness;
+   file system-prompt-withheld.txt TIDAK dihitung (withheld = tidak ada).
+   Perintah tool: tulis instruksi yang dipakai saat start ke file
+   (redacted) lalu --system-prompt <file>; jangan tebak.
+2. parents: sesi subagent v3 (6c6642b7) dibuka sebagai hand-off/brief,
+   jadi upload harus membawa parent chats sampai sesi tempat orang
+   mengetik prompt (sesi top-level 62b2a7a2) via --parent-session.
+   Subagent TIDAK boleh memasukkan sesi utama itu (instruksi tugas),
+   jadi bundle harus dijalankan agen top-level setelah subagent selesai
+   (baris usage subagent baru ditulis saat run-nya complete).
+Usage file v3 (~/.makefun/muse-usage-github-core-clone-v3.jsonl) saat ini
+hanya berisi baris v2 (1 baris, agent 14f67fea); baris v3 menyusul
+setelah run subagent complete + SELECT ulang. Bukti dry-run lengkap:
+/tmp/bundle-v3-dryrun.json. Instruction files: collected (1 file).

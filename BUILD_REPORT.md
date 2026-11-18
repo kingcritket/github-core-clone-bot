@@ -7,8 +7,11 @@ Repo ini: `github-core-clone-bot/` — **v3: server Go (stdlib saja) + binary st
 (Node, spawn `./forge`, baca `PORT <n>`, lalu register/done loop seperti v2).
 Tanpa git binary, tanpa package manager, tanpa layanan luar saat grading. Tanpa UI.
 
-> Status: **v3 SELESAI, conformance lokal 120/120, performa lokal naik vs v2
-> (lihat BUILD_LOG.md bagian v3). Di-submit sebagai entry v3 (lihat laporan).**
+> Status: **v3 SELESAI dan ter-commit (b39e161, GitHub sha_match), conformance
+> lokal 120/120, performa lokal naik vs v2. BELUM di-submit: bundle v20
+> menolak ditulis dari sesi subagent (run record butuh system_prompt +
+> parent chain — lihat BUILD_LOG.md bagian v3 bundle/submit). Submit harus
+> dijalankan agen top-level setelah subagent selesai.**
 
 ## 1. Yang dibangun
 
