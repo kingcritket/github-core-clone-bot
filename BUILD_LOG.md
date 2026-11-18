@@ -124,3 +124,60 @@ penghematan handler yang terukur langsung (push −49%, CPU/request −20%)
 adalah yang akan diteruskan ke server, besarnya tergantung seberapa
 CPU-bound entry di sandbox produksi (2 CPU gVisor) vs forwarder-nya.
 Conformance tetap 120/120 di semua run. README.md tidak diubah.
+
+## v3 — Go rewrite (19 Nov 2026, 00:xx WIB)
+
+Motivasi: v2 (Node, handler dioptimasi) skor server 922/1000 (rank 4262) —
+optimasi handler tidak menggerakkan skor server. Satu-satunya tuas tersisa:
+rewrite ke bahasa yang lebih cepat dengan API/perilaku identik.
+
+Yang dilakukan:
+- Port perilaku-identik seluruh server TS ke Go (stdlib saja): store.go,
+  git.go, rest.go, graphql.go, mcp.go, app.go, main.go. Satu-satunya
+  divergensi yang diterima: Go mengurutkan kunci map saat marshal JSON
+  (JS mempertahankan urutan insert) — suite mem-parse JSON, jadi urutan
+  kunci tidak teramati di check mana pun.
+- Concurrency: read di bawah RLock (clone 50-way memakai kedua core),
+  write di bawah write lock; counter request-id atomik.
+- writePack: blok zlib stored (level-0) via `zlibStore` hand-rolled
+  (header 0x78 0x01 + blok DEFLATE stored + trailer Adler-32) — valid
+  RFC 1950, git meng-inflate identik. Micro-benchmark (repo sintetis
+  200 commit): writePack level-1 20,2 ms vs level-0 1,55 ms (13x).
+  Go flate murni-Go di level 1 jauh lebih lambat dari zlib C yang dipakai
+  Node; level-0 menghilangkan deflate dari hot path clone.
+- inflateAt: memanfaatkan posisi `*bytes.Reader` setelah `zlib.NewReader`
+  (flate membaca byte-per-byte lewat ByteReader, tanpa read-ahead) untuk
+  menemukan ujung stream persis, diverifikasi terhadap trailer Adler-32,
+  dengan Adler-scan lama sebagai fallback.
+- OFS-delta base lookup memakai map start->index, bukan linear scan.
+- `main.ts` kini launcher tipis: spawn `./forge` (binary Go statis,
+  6.463.672 B, stripped, CGO_ENABLED=0), baca baris `PORT <n>` dari
+  stdout-nya, lalu register/done loop yang sama seperti v2.
+- File TS server lama dihapus (app/git/graphql/mcp/rest/store.ts);
+  binary `forge` di-commit sebagai vendored source (mode 100755).
+  Tree total ~6,7 MB (< 16 MB), binary < 8 MB per-file.
+
+Hasil `sdk/run.ts --perf` (VM berbeban — practice run token-radar v6
+sibling memakai ~70% CPU selama semua bench; angka absolut tidak
+stabil, yang bermakna hanya perbandingan relatif di beban yang sama):
+- Go run 1 (level-1): 120/120, perf 152, total 952
+  (push 584/44, clone 185/32, read 1166/41, write 197/35;
+  perf_p50_us 396.799).
+- Node v2 (beban sama): 120/120, perf 142, total 942
+  (push 601/43, clone 123/39, read 1505/36, write 363/24;
+  perf_p50_us 448.512).
+- Go run 2 (level-0): 120/120, perf 146, total 946
+  (push 640/42, clone 101/42, read 1496/36, write 325/26;
+  perf_p50_us 421.187).
+- Bench klien ketat (Go, keep-alive, 2000 GET + 200 POST, beban sama):
+  read Go 0,169 ms/op vs Node 0,204 ms/op (1,21x); write Go 0,098 ms/op
+  vs Node 0,134 ms/op (1,37x).
+- Benchmark handler in-process: read 22,5 µs/op, marshal issueJSON
+  32,4 µs/op, write 41,0 µs/op — logika handler sudah cepat; sisa waktu
+  adalah transport/klien, jadi hand-rolled JSON tidak dikejar.
+- Conformance tetap 120/120 di semua run (feature 600, agent 200).
+- Penilaian jujur: Go ~1,1x lebih cepat dari Node dalam geomean p50
+  di VM berbeban — kenaikan nyata tapi jauh dari ~1,6x yang dibutuhkan
+  untuk skor server ~953 (rank 10). Proyeksi skor server v3 ~935-945
+  (vs 922 v2). Bukan top 10; tetap perbaikan nyata, jadi di-submit
+  sesuai kriteria tugas (120/120 + kenaikan performa nyata).

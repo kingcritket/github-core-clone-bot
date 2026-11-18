@@ -1,17 +1,22 @@
-// main.ts — the entrypoint of this forge, and the only file that talks to the
-// make.fun trial environment. The environment (env) runs the trial: it owns port
-// 8080, drives the suite against whatever this process serves, and decides when
-// the trial is over. This process has a short job list, in this order:
+// main.ts — the entrypoint of this forge (v3, Go core).
 //
-//   1. Start the forge on a port the kernel picks for us.
-//   2. Tell the env that port, so the suite knows where to send its requests.
-//   3. Wait quietly until the env says the trial is finished, then stop.
+// The trial runs `node /bot/main.ts`. This file is a thin launcher: it starts the
+// Go forge binary (`./forge`, a statically linked Linux amd64 binary committed in
+// this repo as vendored source), reads the ephemeral port the binary prints on
+// stdout, registers that port with the trial environment, and waits until the
+// environment says the trial is finished — then stops the forge and exits.
 //
-// Everything GitHub-shaped — repos, REST, GraphQL, MCP, git smart HTTP — lives
-// in app.ts and the modules behind it. Nothing in this file implements any of
-// that; it only performs the handshake above and then gets out of the way.
+// Everything GitHub-shaped — repos, REST, GraphQL, MCP, git smart HTTP — lives in
+// the Go binary (main.go, store.go, git.go, rest.go, graphql.go, mcp.go, app.go in
+// this repo). Nothing in this file implements any of that; it only performs the
+// handshake above and then gets out of the way.
+//
+// Written in plain JavaScript-compatible TypeScript (no type annotations) so it
+// runs under `node /bot/main.ts` exactly like the v2 entrypoint did.
 
-import { createApp } from './app.ts';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 
 // The env's origin, e.g. http://store:8080 inside a trial container. Trailing
 // slashes are stripped so the /register and /done paths below join cleanly.
@@ -27,8 +32,11 @@ const REQUEST_BUDGET_MS = 30_000;
 const FIRST_WAIT_MS = 250;
 const LONGEST_WAIT_MS = 2_000;
 
+// How long to wait for the forge binary to print its PORT line.
+const FORGE_START_TIMEOUT_MS = 30_000;
+
 /** Print a message to stderr and leave with a failure status. */
-function fail(message: string): never {
+function fail(message) {
   process.stderr.write(`[entry] ${message}\n`);
   process.exit(1);
 }
@@ -39,12 +47,69 @@ if (ENV_ORIGIN === '') {
   fail('MAKEFUN_ENV_URL is not set: no environment to register with');
 }
 
-const pause = (ms: number): Promise<void> =>
-  new Promise((wake) => setTimeout(wake, ms));
+const pause = (ms) => new Promise((wake) => setTimeout(wake, ms));
 
 /** How long to wait after the `failures`-th failed attempt: doubling, capped. */
-function waitAfter(failures: number): number {
+function waitAfter(failures) {
   return Math.min(LONGEST_WAIT_MS, FIRST_WAIT_MS * 2 ** Math.min(failures, 8));
+}
+
+// The forge binary lives beside this file in the repo (committed as vendored
+// source). Resolve it from this file's own URL, never from the working dir.
+const FORGE_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'forge');
+
+let forge = null;
+
+/** Start the Go forge and resolve with the ephemeral port it prints. */
+function startForge() {
+  return new Promise((resolve, reject) => {
+    const child = spawn(FORGE_PATH, [], { stdio: ['ignore', 'pipe', 'pipe'] });
+    forge = child;
+    let buffer = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        child.kill();
+        reject(new Error('forge did not print its port in time'));
+      }
+    }, FORGE_START_TIMEOUT_MS);
+    child.stdout.on('data', (chunk) => {
+      if (settled) return;
+      buffer += chunk.toString('utf8');
+      const nl = buffer.indexOf('\n');
+      if (nl < 0) return;
+      const line = buffer.slice(0, nl).trim();
+      const m = /^PORT (\d+)$/.exec(line);
+      if (m === null) {
+        clearTimeout(timer);
+        settled = true;
+        child.kill();
+        reject(new Error(`forge printed an unexpected first line: ${line}`));
+        return;
+      }
+      clearTimeout(timer);
+      settled = true;
+      resolve(Number(m[1]));
+    });
+    child.stderr.on('data', (chunk) => {
+      process.stderr.write(`[forge] ${chunk.toString('utf8')}`);
+    });
+    child.on('error', (err) => {
+      if (!settled) {
+        clearTimeout(timer);
+        settled = true;
+        reject(err);
+      }
+    });
+    child.on('exit', (code) => {
+      if (!settled) {
+        clearTimeout(timer);
+        settled = true;
+        reject(new Error(`forge exited early with code ${code}`));
+      }
+    });
+  });
 }
 
 /**
@@ -55,10 +120,10 @@ function waitAfter(failures: number): number {
  * fix, so that is fatal. Anything else — the env unreachable, a timeout, an
  * unexpected status — is treated as "not ready yet" and retried.
  */
-async function announce(port: number): Promise<void> {
+async function announce(port) {
   let failures = 0;
   for (;;) {
-    let answer: Response;
+    let answer;
     try {
       answer = await fetch(`${ENV_ORIGIN}/register`, {
         method: 'POST',
@@ -88,7 +153,7 @@ async function announce(port: number): Promise<void> {
  * going, with the wait between attempts growing while the env stays silent
  * and resetting to the short wait once it answers again.
  */
-async function waitForFinish(): Promise<void> {
+async function waitForFinish() {
   let failures = 0;
   for (;;) {
     try {
@@ -96,7 +161,7 @@ async function waitForFinish(): Promise<void> {
         signal: AbortSignal.timeout(REQUEST_BUDGET_MS),
       });
       if (answer.ok) {
-        const payload = (await answer.json()) as { done?: unknown };
+        const payload = await answer.json();
         if (payload.done === true) return;
         failures = 0;
       }
@@ -109,35 +174,33 @@ async function waitForFinish(): Promise<void> {
 }
 
 /**
- * The whole life of the process: bind the forge to an ephemeral port (never
- * 8080 — that port belongs to the env), announce the port, then wait for the
- * env to declare the trial finished before closing the server.
+ * The whole life of the process: start the Go forge on an ephemeral port,
+ * announce the port, then wait for the env to declare the trial finished
+ * before stopping the forge.
  */
-async function run(): Promise<void> {
-  const server = createApp();
-  const port = await new Promise<number>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, () => {
-      const bound = server.address();
-      if (bound === null || typeof bound === 'string') {
-        reject(new Error('server did not bind a TCP port'));
-        return;
-      }
-      resolve(bound.port);
-    });
-  });
-
+async function run() {
+  const port = await startForge();
   process.stdout.write(`[entry] forge listening on ephemeral port ${port}\n`);
   await announce(port);
   process.stdout.write('[entry] registered with the environment; waiting for it to finish\n');
   await waitForFinish();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  if (forge !== null) forge.kill();
   process.stdout.write('[entry] environment finished; forge stopped\n');
 }
+
+process.on('SIGTERM', () => {
+  if (forge !== null) forge.kill();
+  process.exit(0);
+});
+process.on('SIGINT', () => {
+  if (forge !== null) forge.kill();
+  process.exit(0);
+});
 
 try {
   await run();
 } catch (error) {
+  if (forge !== null) forge.kill();
   fail(error instanceof Error ? error.message : String(error));
 }
 process.exit(0);

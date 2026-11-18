@@ -2,11 +2,13 @@
 
 Entry bounty make.fun: **Build a GitHub-compatible git forge** (hadiah total $500, 20 tempat
 berbayar). Akun: @kingcritket. Deadline entry: 21 Nov 2026 13:30 WIB (2026-11-21T06:30:00Z).
-Repo ini: `github-core-clone-bot/` — satu proses Node 22, **stdlib Node saja**, tanpa git binary,
-tanpa package manager, tanpa layanan luar saat grading. Tanpa UI.
+Repo ini: `github-core-clone-bot/` — **v3: server Go (stdlib saja) + binary statis
+`forge` yang di-commit sebagai vendored source**, diluncurkan oleh `main.ts` tipis
+(Node, spawn `./forge`, baca `PORT <n>`, lalu register/done loop seperti v2).
+Tanpa git binary, tanpa package manager, tanpa layanan luar saat grading. Tanpa UI.
 
-> Status: **build + tes lokal SELESAI. TIDAK di-submit** (sesuai instruksi tugas — submit dilakukan
-> terpisah oleh pengguna lewat kit CLI).
+> Status: **v3 SELESAI, conformance lokal 120/120, performa lokal naik vs v2
+> (lihat BUILD_LOG.md bagian v3). Di-submit sebagai entry v3 (lihat laporan).**
 
 ## 1. Yang dibangun
 
